@@ -48,46 +48,52 @@ app.post('/api/optimize', async (req, res) => {
     return res.status(400).json({ error: 'Missing resumeText or jobDescription.' });
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.GOOGLE_API_KEY;
   if (!apiKey || apiKey.trim() === '') {
-    console.error('❌ ANTHROPIC_API_KEY is missing or empty');
+    console.error('❌ GOOGLE_API_KEY is missing or empty');
     return res.status(500).json({
-      error: 'ANTHROPIC_API_KEY is not configured. Add it to Railway environment variables and redeploy.'
+      error: 'GOOGLE_API_KEY is not configured. Add it to Railway environment variables and redeploy.'
     });
   }
 
-  // Debug: log key length (not the actual key)
-  console.log(`✅ API Key found (length: ${apiKey.length})`);
+  console.log(`✅ Google API Key found (length: ${apiKey.length})`);
 
   try {
-    const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=' + process.env.GOOGLE_API_KEY, {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey.trim()}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': apiKey.trim(), // Strip any accidental whitespace
-        'anthropic-version': '2024-06-01' // ← Updated to current version
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 4000,
-        system: SYSTEM_PROMPT,
-        messages: [{
-          role: 'user',
-          content: `RESUME:\n${resumeText.slice(0, 6000)}\n\nJOB DESCRIPTION:\n${jobDescription.slice(0, 3000)}\n\nOptimize this resume. Return only the JSON object.`
-        }]
+        systemInstruction: {
+          parts: { text: SYSTEM_PROMPT }
+        },
+        contents: [{
+          parts: [{
+            text: `RESUME:\n${resumeText.slice(0, 6000)}\n\nJOB DESCRIPTION:\n${jobDescription.slice(0, 3000)}\n\nOptimize this resume. Return only the JSON object.`
+          }]
+        }],
+        generationConfig: {
+          maxOutputTokens: 4000
+        }
       })
     });
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
-      console.error('Anthropic API error:', response.status, err);
+      console.error('Google API error:', response.status, err);
       return res.status(response.status).json({
-        error: err.error?.message || `Anthropic API error ${response.status}`
+        error: err.error?.message || `Google API error ${response.status}`
       });
     }
 
     const data = await response.json();
-    const raw = data.content.filter(b => b.type === 'text').map(b => b.text).join('');
+    const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    
+    if (!raw) {
+      return res.status(500).json({ error: 'No response from Google API' });
+    }
+
     const clean = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '').trim();
     const parsed = JSON.parse(clean);
 
@@ -106,7 +112,7 @@ app.get('*', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`\n✅  ResumeAI running → http://localhost:${PORT}`);
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.warn('⚠️   ANTHROPIC_API_KEY not set. Set it in Railway and redeploy.\n');
+  if (!process.env.GOOGLE_API_KEY) {
+    console.warn('⚠️   GOOGLE_API_KEY not set. Set it in Railway and redeploy.\n');
   }
 });
