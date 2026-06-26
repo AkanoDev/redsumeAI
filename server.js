@@ -60,7 +60,7 @@ app.post('/api/optimize', async (req, res) => {
   console.log(`✅ API Key found (length: ${apiKey.length})`);
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=' + process.env.GOOGLE_API_KEY, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
