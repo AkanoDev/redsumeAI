@@ -1,118 +1,142 @@
-require('dotenv').config();
+require("dotenv").config();
 
-const express = require('express');
-const path = require('path');
+const express = require("express");
+const path = require("path");
+const { GoogleGenAI } = require("@google/genai");
 
 const app = express();
-app.use(express.json({ limit: '500kb' }));
-app.use(express.static(path.join(__dirname)));
 
-const SYSTEM_PROMPT = `You are an expert ATS resume optimizer. Analyze the resume and optimize it for the job description.
-Return ONLY a valid JSON object — no markdown, no code fences, no preamble. Raw JSON only.
+app.use(express.json({ limit: "500kb" }));
+app.use(express.static(__dirname));
 
-Schema:
+const ai = new GoogleGenAI({
+  apiKey: process.env.GOOGLE_API_KEY,
+});
+
+const SYSTEM_PROMPT = `
+You are an expert ATS resume optimizer.
+
+Analyze the resume against the provided job description.
+
+Return ONLY valid JSON.
+
 {
   "name": "Full Name",
-  "contact": { "email": "", "phone": "", "location": "", "linkedin": "" },
-  "summary": "2-3 sentence professional summary targeting this specific role",
+  "contact": {
+    "email": "",
+    "phone": "",
+    "location": "",
+    "linkedin": ""
+  },
+  "summary": "",
   "experience": [
     {
       "company": "",
       "title": "",
       "dates": "",
       "location": "",
-      "bullets": ["Strong achievement bullet with action verb and metric..."]
+      "bullets": []
     }
   ],
-  "education": [{ "school": "", "degree": "", "dates": "", "details": "" }],
-  "skills": ["skill1", "skill2"],
-  "keywords_added": ["keyword1", "keyword2"],
-  "match_score_before": 35,
-  "match_score_after": 82
+  "education": [
+    {
+      "school": "",
+      "degree": "",
+      "dates": "",
+      "details": ""
+    }
+  ],
+  "skills": [],
+  "keywords_added": [],
+  "match_score_before": 0,
+  "match_score_after": 0
 }
 
 Rules:
-- Preserve all real experience — never fabricate companies or roles
-- Weave JD keywords naturally into existing bullet points
-- Strengthen bullets with action verbs: Led, Built, Delivered, Optimized, Spearheaded, Achieved
-- Quantify achievements; infer reasonable ranges if none given (e.g. "~30% improvement")
-- Rewrite summary to specifically target this role
-- match_score_before = realistic % of key JD requirements in original resume (0-100)
-- match_score_after = % covered after optimization, meaningfully higher than before
-- keywords_added = important JD terms added that were absent from original`;
 
-app.post('/api/optimize', async (req, res) => {
-  const { resumeText, jobDescription } = req.body;
+- Never invent companies.
+- Improve wording.
+- Add ATS keywords naturally.
+- Quantify achievements where possible.
+- Return ONLY JSON.
+`;
 
-  if (!resumeText || !jobDescription) {
-    return res.status(400).json({ error: 'Missing resumeText or jobDescription.' });
-  }
-
-  const apiKey = process.env.GOOGLE_API_KEY;
-  if (!apiKey || apiKey.trim() === '') {
-    console.error('❌ GOOGLE_API_KEY is missing or empty');
-    return res.status(500).json({
-      error: 'GOOGLE_API_KEY is not configured. Add it to Railway environment variables and redeploy.'
-    });
-  }
-
-  console.log(`✅ Google API Key found (length: ${apiKey.length})`);
-
+app.post("/api/optimize", async (req, res) => {
   try {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey.trim()}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        systemInstruction: {
-          parts: { text: SYSTEM_PROMPT }
-        },
-        contents: [{
-          parts: [{
-            text: `RESUME:\n${resumeText.slice(0, 6000)}\n\nJOB DESCRIPTION:\n${jobDescription.slice(0, 3000)}\n\nOptimize this resume. Return only the JSON object.`
-          }]
-        }],
-        generationConfig: {
-          maxOutputTokens: 4000
-        }
-      })
-    });
+    const { resumeText, jobDescription } = req.body;
 
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      console.error('Google API error:', response.status, err);
-      return res.status(response.status).json({
-        error: err.error?.message || `Google API error ${response.status}`
+    if (!resumeText || !jobDescription) {
+      return res.status(400).json({
+        error: "Missing resumeText or jobDescription.",
       });
     }
 
-    const data = await response.json();
-    const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    
-    if (!raw) {
-      return res.status(500).json({ error: 'No response from Google API' });
+    if (!process.env.GOOGLE_API_KEY) {
+      return res.status(500).json({
+        error: "GOOGLE_API_KEY not configured.",
+      });
     }
 
-    const clean = raw.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '').trim();
-    const parsed = JSON.parse(clean);
+    const prompt = `
+RESUME
+
+${resumeText}
+
+--------------------------
+
+JOB DESCRIPTION
+
+${jobDescription}
+
+Optimize the resume.
+
+Return ONLY JSON.
+`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        temperature: 0.4,
+      },
+      contents: prompt,
+    });
+
+    const raw = response.text.trim();
+
+    const clean = raw
+      .replace(/^```json/i, "")
+      .replace(/^```/, "")
+      .replace(/```$/, "")
+      .trim();
+
+    let parsed;
+
+    try {
+      parsed = JSON.parse(clean);
+    } catch {
+      console.error(clean);
+      return res.status(500).json({
+        error: "Gemini returned invalid JSON.",
+      });
+    }
 
     res.json(parsed);
   } catch (err) {
-    console.error('Optimization error:', err.message);
-    res.status(500).json({ error: err.message || 'Unexpected server error.' });
+    console.error(err);
+
+    res.status(500).json({
+      error: err.message || "Unexpected server error.",
+    });
   }
 });
 
-// Fallback: serve index.html for any unmatched route (SPA support)
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "index.html"));
 });
 
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
-  console.log(`\n✅  ResumeAI running → http://localhost:${PORT}`);
-  if (!process.env.GOOGLE_API_KEY) {
-    console.warn('⚠️   GOOGLE_API_KEY not set. Set it in Railway and redeploy.\n');
-  }
+  console.log(`✅ ResumeAI running on port ${PORT}`);
 });
