@@ -5,7 +5,7 @@ const path = require('path');
 
 const app = express();
 app.use(express.json({ limit: '500kb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname)));
 
 const SYSTEM_PROMPT = `You are an expert ATS resume optimizer. Analyze the resume and optimize it for the job description.
 Return ONLY a valid JSON object — no markdown, no code fences, no preamble. Raw JSON only.
@@ -48,19 +48,24 @@ app.post('/api/optimize', async (req, res) => {
     return res.status(400).json({ error: 'Missing resumeText or jobDescription.' });
   }
 
-  if (!process.env.ANTHROPIC_API_KEY) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey || apiKey.trim() === '') {
+    console.error('❌ ANTHROPIC_API_KEY is missing or empty');
     return res.status(500).json({
-      error: 'ANTHROPIC_API_KEY is not configured. Copy .env.example to .env and add your key.'
+      error: 'ANTHROPIC_API_KEY is not configured. Add it to Railway environment variables and redeploy.'
     });
   }
+
+  // Debug: log key length (not the actual key)
+  console.log(`✅ API Key found (length: ${apiKey.length})`);
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01'
+        'x-api-key': apiKey.trim(), // Strip any accidental whitespace
+        'anthropic-version': '2024-06-01' // ← Updated to current version
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
@@ -75,6 +80,7 @@ app.post('/api/optimize', async (req, res) => {
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
+      console.error('Anthropic API error:', response.status, err);
       return res.status(response.status).json({
         error: err.error?.message || `Anthropic API error ${response.status}`
       });
@@ -101,6 +107,6 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`\n✅  ResumeAI running → http://localhost:${PORT}`);
   if (!process.env.ANTHROPIC_API_KEY) {
-    console.warn('⚠️   ANTHROPIC_API_KEY not set. Copy .env.example → .env and add your key.\n');
+    console.warn('⚠️   ANTHROPIC_API_KEY not set. Set it in Railway and redeploy.\n');
   }
 });
