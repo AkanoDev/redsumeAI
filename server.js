@@ -59,6 +59,8 @@ Rules:
 - Add ATS keywords naturally.
 - Quantify achievements where possible.
 - Return ONLY JSON.
+- A4 size
+- Dont mix work experiences
 `;
 
 app.post("/api/optimize", async (req, res) => {
